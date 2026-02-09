@@ -8,6 +8,15 @@ let camera = null;
 let pose = null;
 let wakeLock = null;
 
+// وضع Debug
+let debugMode = false;
+let debugInfo = {
+    eyeDistance: 0,
+    noseZ: 0,
+    faceSize: 0,
+    visibility: 0
+};
+
 // عناصر DOM
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
@@ -20,14 +29,32 @@ const stopBtn = document.getElementById('stopBtn');
 const resetBtn = document.getElementById('resetBtn');
 const sequenceSteps = document.getElementById('sequenceSteps');
 
-// عداد الثبات للتقليل من التذبذب
+// عداد الثبات المحسّن
 let poseStabilityCounter = {
     'standing': 0,
     'ruku': 0,
     'sujood': 0,
     'sitting': 0
 };
-const STABILITY_THRESHOLD = 3; // عدد الإطارات المتتالية المطلوبة لتأكيد الوضعية
+const STABILITY_THRESHOLD = 5; // زيادة العتبة لمزيد من الثبات
+
+// إعدادات الحساسية (قابلة للتعديل)
+const SENSITIVITY = {
+    // السجود: الوجه قريب جداً
+    sujood_min_face_size: 0.18,  // حجم الوجه الأدنى للسجود
+    sujood_max_z: -0.2,           // أقرب مسافة z
+    
+    // الركوع: الوجه متوسط القرب
+    ruku_min_face_size: 0.10,
+    ruku_max_face_size: 0.18,
+    
+    // الجلوس: الوجه بعيد نسبياً
+    sitting_min_face_size: 0.08,
+    sitting_max_face_size: 0.15,
+    
+    // القيام: الوجه بعيد جداً أو غير مرئي
+    standing_max_face_size: 0.08
+};
 
 // تهيئة MediaPipe Pose
 function initPose() {
@@ -71,169 +98,229 @@ function onResults(results) {
         lineWidth: 2,
         radius: 6
     });
+    
+    // رسم معلومات Debug إذا كان مفعلاً
+    if (debugMode) {
+        drawDebugInfo();
+    }
+    
     ctx.restore();
 
     // تحديد الوضعية
     detectPrayerPoseFromFloor(results.poseLandmarks);
 }
 
-// كشف وضعية الصلاة من الأرض (الكاميرا تنظر للأعلى)
+// كشف وضعية الصلاة - نسخة محسّنة
 function detectPrayerPoseFromFloor(landmarks) {
     const nose = landmarks[0];
     const leftEye = landmarks[2];
     const rightEye = landmarks[5];
     const leftShoulder = landmarks[11];
     const rightShoulder = landmarks[12];
-    const leftElbow = landmarks[13];
-    const rightElbow = landmarks[14];
-    const leftWrist = landmarks[15];
-    const rightWrist = landmarks[16];
     const leftHip = landmarks[23];
     const rightHip = landmarks[24];
     
-    // حساب المسافات والمواضع
-    const noseY = nose.y;
-    const noseZ = nose.z; // العمق - البعد عن الكاميرا
-    const shoulderMidY = (leftShoulder.y + rightShoulder.y) / 2;
+    // حساب حجم الوجه (المسافة بين العينين)
+    const eyeDistance = Math.sqrt(
+        Math.pow(leftEye.x - rightEye.x, 2) + 
+        Math.pow(leftEye.y - rightEye.y, 2)
+    );
     
-    // حساب حجم الوجه (للتعرف على القرب من الكاميرا)
-    const eyeDistance = Math.abs(leftEye.x - rightEye.x);
+    // عمق الأنف (البعد عن الكاميرا)
+    const noseZ = nose.z;
     
-    // حساب ظهور اليدين
-    const handsVisible = (leftWrist.visibility > 0.5 || rightWrist.visibility > 0.5);
-    const shouldersVisible = (leftShoulder.visibility > 0.5 && rightShoulder.visibility > 0.5);
-    const faceVisible = (nose.visibility > 0.5);
+    // حساب حجم الجسم (المسافة بين الكتفين)
+    const shoulderDistance = Math.sqrt(
+        Math.pow(leftShoulder.x - rightShoulder.x, 2) + 
+        Math.pow(leftShoulder.y - rightShoulder.y, 2)
+    );
+    
+    // مستوى الوضوح
+    const faceVisibility = (nose.visibility + leftEye.visibility + rightEye.visibility) / 3;
+    const shouldersVisible = leftShoulder.visibility > 0.5 && rightShoulder.visibility > 0.5;
+    
+    // حفظ معلومات Debug
+    debugInfo = {
+        eyeDistance: eyeDistance.toFixed(3),
+        noseZ: noseZ.toFixed(3),
+        faceSize: eyeDistance.toFixed(3),
+        visibility: faceVisibility.toFixed(2),
+        shoulderDist: shoulderDistance.toFixed(3)
+    };
     
     let detectedPose = 'unknown';
     
-    // منطق الكشف بناءً على الكاميرا الموضوعة على الأرض:
+    // ===== منطق الكشف المحسّن =====
     
-    // سجود: الوجه قريب جداً من الكاميرا (حجم العينين كبير)
-    if (faceVisible && eyeDistance > 0.15 && noseZ > -0.3) {
+    // 1️⃣ سجود: الوجه قريب جداً من الكاميرا
+    if (faceVisibility > 0.6 && 
+        eyeDistance >= SENSITIVITY.sujood_min_face_size && 
+        noseZ >= SENSITIVITY.sujood_max_z) {
         detectedPose = 'sujood';
     }
-    // ركوع: الجسم العلوي واليدين ظاهرة، الوجه متوسط القرب
-    else if (shouldersVisible && handsVisible && eyeDistance > 0.08 && eyeDistance < 0.15) {
+    
+    // 2️⃣ ركوع: الجسم العلوي واضح، الوجه متوسط القرب
+    else if (shouldersVisible && 
+             faceVisibility > 0.5 &&
+             eyeDistance >= SENSITIVITY.ruku_min_face_size && 
+             eyeDistance < SENSITIVITY.ruku_max_face_size) {
         detectedPose = 'ruku';
     }
-    // جلوس: الجسم السفلي ظاهر، الوجه بعيد نسبياً
-    else if (shouldersVisible && eyeDistance > 0.05 && eyeDistance < 0.10 && noseY > 0.3) {
+    
+    // 3️⃣ جلوس: الوجه ظاهر بوضوح، مسافة متوسطة
+    else if (faceVisibility > 0.6 &&
+             eyeDistance >= SENSITIVITY.sitting_min_face_size && 
+             eyeDistance < SENSITIVITY.sitting_max_face_size &&
+             noseZ < -0.3) {
         detectedPose = 'sitting';
     }
-    // قيام: الشخص بعيد أو غير ظاهر بوضوح (عند الوقوف)
-    else if ((!faceVisible || eyeDistance < 0.05) || noseZ < -0.5) {
+    
+    // 4️⃣ قيام: الوجه بعيد جداً أو غير واضح
+    else if (eyeDistance < SENSITIVITY.standing_max_face_size || 
+             faceVisibility < 0.4 ||
+             noseZ < -0.6) {
         detectedPose = 'standing';
     }
     
-    // تطبيق آلية الثبات لتقليل التذبذب
+    // تطبيق آلية الثبات
     updatePoseStability(detectedPose);
 }
 
-// تحديث عداد الثبات
+// تحديث عداد الثبات - نسخة محسّنة
 function updatePoseStability(detectedPose) {
     // زيادة عداد الوضعية المكتشفة
     if (detectedPose !== 'unknown') {
-        poseStabilityCounter[detectedPose]++;
+        poseStabilityCounter[detectedPose] += 2; // زيادة أسرع للوضعية الحالية
     }
     
-    // التحقق من الوضعية الأكثر ثباتاً
-    let stablePose = currentPose;
-    let maxCount = STABILITY_THRESHOLD;
-    
-    for (let pose in poseStabilityCounter) {
-        if (poseStabilityCounter[pose] >= maxCount) {
-            stablePose = pose;
-            maxCount = poseStabilityCounter[pose];
-        }
-    }
-    
-    // إذا تغيرت الوضعية بثبات
-    if (stablePose !== currentPose && stablePose !== 'unknown') {
-        previousPose = currentPose;
-        currentPose = stablePose;
-        onPoseChange(currentPose);
-        updatePoseDisplay();
-        
-        // إعادة تعيين عدادات الثبات
-        for (let p in poseStabilityCounter) {
-            poseStabilityCounter[p] = 0;
-        }
-    }
-    
-    // تقليل العدادات الأخرى تدريجياً
+    // تقليل العدادات الأخرى
     for (let p in poseStabilityCounter) {
         if (p !== detectedPose && poseStabilityCounter[p] > 0) {
             poseStabilityCounter[p]--;
         }
     }
+    
+    // التحقق من الوضعية الأكثر ثباتاً
+    let stablePose = null;
+    let maxCount = STABILITY_THRESHOLD;
+    
+    for (let p in poseStabilityCounter) {
+        if (poseStabilityCounter[p] >= maxCount) {
+            stablePose = p;
+            maxCount = poseStabilityCounter[p];
+        }
+    }
+    
+    // إذا تغيرت الوضعية بثبات
+    if (stablePose && stablePose !== currentPose) {
+        previousPose = currentPose;
+        currentPose = stablePose;
+        onPoseChange(currentPose);
+        updatePoseDisplay();
+        
+        console.log('✅ تغيير الوضعية:', previousPose, '→', currentPose);
+    }
 }
 
 // عند تغيير الوضعية
 function onPoseChange(newPose) {
-    poseSequence.push(newPose);
-    
-    console.log('تغيير الوضعية:', newPose, 'التسلسل:', poseSequence.slice(-5));
-    
-    // إبقاء آخر 10 حركات فقط
-    if (poseSequence.length > 10) {
-        poseSequence.shift();
+    // إضافة للتسلسل فقط إذا كانت وضعية مختلفة عن السابقة
+    if (poseSequence.length === 0 || poseSequence[poseSequence.length - 1] !== newPose) {
+        poseSequence.push(newPose);
+        
+        console.log('📝 التسلسل:', poseSequence.slice(-6).join(' → '));
+        
+        // إبقاء آخر 12 حركة
+        if (poseSequence.length > 12) {
+            poseSequence.shift();
+        }
+        
+        // التحقق من اكتمال ركعة
+        checkRakaatComplete();
     }
-
-    // التحقق من اكتمال ركعة
-    checkRakaatComplete();
 }
 
-// التحقق من اكتمال ركعة كاملة
+// التحقق من اكتمال ركعة - منطق محسّن ومبسّط
 function checkRakaatComplete() {
-    // البحث عن التسلسل: قيام -> ركوع -> سجود -> جلوس -> سجود
-    // أو على الأقل: قيام -> ركوع -> سجود (مرتين)
+    const seq = poseSequence;
     
-    const recentSequence = poseSequence.slice(-8); // آخر 8 حركات
+    // نحتاج على الأقل 4 حركات لركعة واحدة
+    if (seq.length < 4) return;
     
-    if (recentSequence.length < 4) return;
+    // البحث عن نمط الركعة في آخر 8 حركات
+    const recent = seq.slice(-8);
     
-    // البحث عن نمط الركعة
-    let hasStanding = false;
-    let hasRuku = false;
-    let sujoodCount = 0;
-    let lastSujoodIndex = -1;
+    // التسلسل المطلوب: standing → ruku → sujood → sujood
+    // أو: standing → ruku → sujood → sitting → sujood
     
-    for (let i = 0; i < recentSequence.length; i++) {
-        if (recentSequence[i] === 'standing') hasStanding = true;
-        if (recentSequence[i] === 'ruku' && hasStanding) hasRuku = true;
-        if (recentSequence[i] === 'sujood' && hasRuku) {
-            sujoodCount++;
-            lastSujoodIndex = i;
+    let standingIndex = -1;
+    let rukuIndex = -1;
+    let firstSujoodIndex = -1;
+    let secondSujoodIndex = -1;
+    
+    // البحث عن التسلسل من اليمين لليسار (الأحدث)
+    for (let i = recent.length - 1; i >= 0; i--) {
+        if (secondSujoodIndex === -1 && recent[i] === 'sujood') {
+            secondSujoodIndex = i;
+        } else if (secondSujoodIndex !== -1 && firstSujoodIndex === -1 && recent[i] === 'sujood') {
+            firstSujoodIndex = i;
+        } else if (firstSujoodIndex !== -1 && rukuIndex === -1 && recent[i] === 'ruku') {
+            rukuIndex = i;
+        } else if (rukuIndex !== -1 && standingIndex === -1 && recent[i] === 'standing') {
+            standingIndex = i;
         }
     }
     
-    // ركعة كاملة: قيام + ركوع + سجودين
-    if (hasStanding && hasRuku && sujoodCount >= 2) {
-        console.log('✅ ركعة كاملة مكتشفة!');
+    // التحقق من اكتمال النمط
+    const isComplete = standingIndex !== -1 && 
+                       rukuIndex !== -1 && 
+                       firstSujoodIndex !== -1 && 
+                       secondSujoodIndex !== -1 &&
+                       standingIndex < rukuIndex &&
+                       rukuIndex < firstSujoodIndex &&
+                       firstSujoodIndex < secondSujoodIndex;
+    
+    if (isComplete) {
+        console.log('🎉 ركعة كاملة! النمط:', recent.join(' → '));
+        
         rakaatCount++;
         updateRakaatDisplay();
         highlightSequence();
         
-        // إعادة تعيين التسلسل للبدء بالركعة التالية
+        // إعادة تعيين التسلسل
         poseSequence = [];
         
-        // إشعار اهتزازي
+        // إشعارات
         if ('vibrate' in navigator) {
-            navigator.vibrate([200, 100, 200, 100, 200]);
+            navigator.vibrate([300, 100, 300, 100, 300]);
         }
-        
-        // إشعار صوتي
         playCompletionSound();
+        
+        // إشعار بصري
+        showNotification('ركعة رقم ' + rakaatCount + ' ✅');
     }
+}
+
+// عرض إشعار بصري
+function showNotification(message) {
+    const notification = document.createElement('div');
+    notification.className = 'rakaat-notification';
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        setTimeout(() => notification.remove(), 300);
+    }, 2000);
 }
 
 // تحديث عرض الركعات
 function updateRakaatDisplay() {
     rakaatCountEl.textContent = rakaatCount;
-    rakaatCountEl.style.animation = 'pulse 0.5s ease';
+    rakaatCountEl.style.animation = 'none';
     setTimeout(() => {
-        rakaatCountEl.style.animation = '';
-    }, 500);
+        rakaatCountEl.style.animation = 'pulse 0.6s ease';
+    }, 10);
 }
 
 // تحديث عرض الوضعية
@@ -257,34 +344,65 @@ function highlightSequence() {
         setTimeout(() => {
             step.style.backgroundColor = '#4CAF50';
             step.style.color = 'white';
-            step.style.transform = 'scale(1.1)';
+            step.style.transform = 'scale(1.15)';
             setTimeout(() => {
                 step.style.backgroundColor = '';
                 step.style.color = '';
                 step.style.transform = '';
-            }, 400);
-        }, index * 100);
+            }, 500);
+        }, index * 120);
     });
+}
+
+// رسم معلومات Debug
+function drawDebugInfo() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(10, 10, 250, 140);
+    ctx.fillStyle = '#00FF00';
+    ctx.font = '14px monospace';
+    
+    let y = 30;
+    ctx.fillText(`Face Size: ${debugInfo.faceSize}`, 20, y);
+    y += 20;
+    ctx.fillText(`Nose Z: ${debugInfo.noseZ}`, 20, y);
+    y += 20;
+    ctx.fillText(`Visibility: ${debugInfo.visibility}`, 20, y);
+    y += 20;
+    ctx.fillText(`Pose: ${currentPose}`, 20, y);
+    y += 20;
+    ctx.fillText(`Sequence: ${poseSequence.slice(-3).join('-')}`, 20, y);
+    y += 20;
+    ctx.fillText(`Rakaat: ${rakaatCount}`, 20, y);
 }
 
 // صوت الإكمال
 function playCompletionSound() {
     try {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
         
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
+        // نغمة أولى
+        const osc1 = audioContext.createOscillator();
+        const gain1 = audioContext.createGain();
+        osc1.connect(gain1);
+        gain1.connect(audioContext.destination);
+        osc1.frequency.value = 800;
+        osc1.type = 'sine';
+        gain1.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gain1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+        osc1.start(audioContext.currentTime);
+        osc1.stop(audioContext.currentTime + 0.2);
         
-        oscillator.frequency.value = 800;
-        oscillator.type = 'sine';
-        
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
-        
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.3);
+        // نغمة ثانية
+        const osc2 = audioContext.createOscillator();
+        const gain2 = audioContext.createGain();
+        osc2.connect(gain2);
+        gain2.connect(audioContext.destination);
+        osc2.frequency.value = 1000;
+        osc2.type = 'sine';
+        gain2.gain.setValueAtTime(0.3, audioContext.currentTime + 0.15);
+        gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.35);
+        osc2.start(audioContext.currentTime + 0.15);
+        osc2.stop(audioContext.currentTime + 0.35);
     } catch (error) {
         console.log('لا يمكن تشغيل الصوت');
     }
@@ -295,10 +413,9 @@ async function startCamera() {
     try {
         statusEl.textContent = 'جارٍ تشغيل الكاميرا...';
         
-        // طلب الكاميرا الأمامية مع دقة متوسطة (أداء أفضل على الهواتف)
         const stream = await navigator.mediaDevices.getUserMedia({
             video: {
-                facingMode: 'user', // الكاميرا الأمامية
+                facingMode: 'user',
                 width: { ideal: 640 },
                 height: { ideal: 480 }
             },
@@ -314,7 +431,6 @@ async function startCamera() {
         
         await video.play();
         
-        // بدء معالجة الفيديو
         camera = new Camera(video, {
             onFrame: async () => {
                 if (isRecording && pose) {
@@ -331,13 +447,22 @@ async function startCamera() {
         startBtn.style.display = 'none';
         stopBtn.style.display = 'inline-block';
         
-        // طلب wake lock لمنع إطفاء الشاشة
         await requestWakeLock();
         
+        console.log('✅ الكاميرا تعمل بنجاح');
+        
     } catch (error) {
-        console.error('خطأ في تشغيل الكاميرا:', error);
+        console.error('❌ خطأ في تشغيل الكاميرا:', error);
         statusEl.textContent = '❌ خطأ في الكاميرا';
-        alert('لم يتم السماح بالوصول للكاميرا.\n\nيرجى:\n1. السماح للمتصفح باستخدام الكاميرا\n2. التأكد من عدم استخدام تطبيق آخر للكاميرا\n3. إعادة تحميل الصفحة');
+        
+        let errorMsg = 'لم يتم السماح بالوصول للكاميرا.\n\n';
+        errorMsg += 'يرجى:\n';
+        errorMsg += '1. السماح للمتصفح باستخدام الكاميرا\n';
+        errorMsg += '2. التأكد من فتح التطبيق عبر HTTPS\n';
+        errorMsg += '3. إعادة تحميل الصفحة\n\n';
+        errorMsg += 'ملاحظة: التطبيق يجب أن يكون على خادم (Netlify أو GitHub Pages)';
+        
+        alert(errorMsg);
     }
 }
 
@@ -361,12 +486,10 @@ function stopCamera() {
     
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // إلغاء wake lock
     if (wakeLock !== null) {
-        wakeLock.release()
-            .then(() => {
-                wakeLock = null;
-            });
+        wakeLock.release().then(() => {
+            wakeLock = null;
+        });
     }
 }
 
@@ -376,8 +499,17 @@ function resetCounter() {
         rakaatCount = 0;
         poseSequence = [];
         currentPose = 'unknown';
+        previousPose = 'unknown';
+        
+        // إعادة تعيين عدادات الثبات
+        for (let p in poseStabilityCounter) {
+            poseStabilityCounter[p] = 0;
+        }
+        
         updateRakaatDisplay();
         updatePoseDisplay();
+        
+        console.log('🔄 تم إعادة تعيين العداد');
     }
 }
 
@@ -386,21 +518,30 @@ async function requestWakeLock() {
     try {
         if ('wakeLock' in navigator) {
             wakeLock = await navigator.wakeLock.request('screen');
-            console.log('Wake Lock مفعّل - الشاشة لن تنطفئ');
+            console.log('🔒 Wake Lock مفعّل - الشاشة لن تنطفئ');
             
             wakeLock.addEventListener('release', () => {
-                console.log('Wake Lock تم إلغاؤه');
+                console.log('🔓 Wake Lock تم إلغاؤه');
             });
         }
     } catch (err) {
-        console.log('Wake Lock غير متاح:', err);
+        console.log('⚠️ Wake Lock غير متاح:', err);
     }
+}
+
+// تبديل وضع Debug
+function toggleDebug() {
+    debugMode = !debugMode;
+    console.log('🐛 وضع Debug:', debugMode ? 'مفعّل' : 'معطّل');
 }
 
 // معالجات الأحداث
 startBtn.addEventListener('click', startCamera);
 stopBtn.addEventListener('click', stopCamera);
 resetBtn.addEventListener('click', resetCounter);
+
+// ضغطة مزدوجة على العداد لتفعيل Debug
+rakaatCountEl.addEventListener('dblclick', toggleDebug);
 
 // إعادة تفعيل wake lock عند العودة للصفحة
 document.addEventListener('visibilitychange', async () => {
@@ -412,19 +553,20 @@ document.addEventListener('visibilitychange', async () => {
 // تهيئة التطبيق
 window.addEventListener('load', () => {
     initPose();
-    console.log('✅ تم تحميل التطبيق بنجاح');
+    console.log('✅ تم تحميل التطبيق بنجاح - نسخة محسّنة v2.0');
     console.log('📱 ضع الهاتف على الأرض أمامك في موضع السجود');
+    console.log('💡 اضغط مرتين على العداد لتفعيل وضع Debug');
 });
 
-// منع تكبير الشاشة على الهواتف
-document.addEventListener('gesturestart', function (e) {
-    e.preventDefault();
-});
+// منع zoom
+document.addEventListener('gesturestart', e => e.preventDefault());
+document.addEventListener('gesturechange', e => e.preventDefault());
+document.addEventListener('gestureend', e => e.preventDefault());
 
-// منع السكرول أثناء الاستخدام
+// منع double-tap zoom
 let lastTouchEnd = 0;
-document.addEventListener('touchend', function (event) {
-    const now = (new Date()).getTime();
+document.addEventListener('touchend', event => {
+    const now = Date.now();
     if (now - lastTouchEnd <= 300) {
         event.preventDefault();
     }
