@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#667eea">
+    <title>عداد الركعات التلقائي</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- أيقونات للـ iOS -->
+    <link rel="apple-touch-icon" sizes="180x180" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect fill='%23667eea' width='100' height='100'/%3E%3Ctext x='50' y='60' font-size='50' text-anchor='middle' fill='white'%3E🕌%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🕌 عداد الركعات التلقائي</h1>
+            <p class="subtitle">ضع الهاتف على الأرض أمامك في موضع السجود</p>
+        </header>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="label">الحالة:</span>
+                <span id="status" class="status-value">جاهز</span>
+            </div>
+            <div class="status-item">
+                <span class="label">الوضعية:</span>
+                <span id="pose" class="pose-value">غير محدد</span>
+            </div>
+        </div>
+
+        <div class="counter-display">
+            <div class="counter-label">عدد الركعات</div>
+            <div class="counter-number" id="rakaatCount">0</div>
+        </div>
+
+        <div class="video-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+            <div class="video-guide">
+                <div class="guide-text">📱 الكاميرا تنظر للأعلى</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn" class="btn btn-primary">
+                <span class="btn-icon">📹</span>
+                بدء التسجيل
+            </button>
+            <button id="stopBtn" class="btn btn-danger" style="display:none;">
+                <span class="btn-icon">⏹️</span>
+                إيقاف
+            </button>
+            <button id="resetBtn" class="btn btn-secondary">
+                <span class="btn-icon">🔄</span>
+                إعادة تعيين
+            </button>
+        </div>
+
+        <div class="prayer-sequence">
+            <h3>تسلسل الركعة:</h3>
+            <div class="sequence-steps" id="sequenceSteps">
+                <div class="step">1️⃣ قيام</div>
+                <div class="step">2️⃣ ركوع</div>
+                <div class="step">3️⃣ سجود أول</div>
+                <div class="step">4️⃣ جلوس</div>
+                <div class="step">5️⃣ سجود ثاني</div>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h3>📋 ملاحظات مهمة:</h3>
+            <ul>
+                <li>ضع الهاتف على الأرض مباشرة أمامك (حيث تسجد)</li>
+                <li>الكاميرا تنظر للأعلى نحو وجهك</li>
+                <li>المسافة المثالية: 30-50 سم من موضع السجود</li>
+                <li>ثبّت الهاتف بحيث لا يتحرك أثناء الصلاة</li>
+                <li>تأكد من وجود إضاءة جيدة من الأعلى</li>
+                <li>اترك الشاشة مضاءة (التطبيق يمنع الإطفاء تلقائياً)</li>
+                <li>✅ التطبيق يعمل محلياً - لا يتم إرسال أي بيانات</li>
+            </ul>
+        </div>
+
+        <div class="tips-box">
+            <h3>💡 نصائح للحصول على أفضل نتائج:</h3>
+            <div class="tip">
+                <strong>✅ افعل:</strong>
+                <p>ضع الهاتف على سطح مستوٍ • أكمل كل حركة بوضوح • استخدم إضاءة جيدة</p>
+            </div>
+            <div class="tip">
+                <strong>❌ لا تفعل:</strong>
+                <p>لا تحجب الكاميرا • لا تتحرك بسرعة • لا تستخدم في الظلام</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- تحميل MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    
+    <!-- تطبيق JavaScript -->
+    <script src="app.js"></script>
+    
+    <!-- تسجيل Service Worker للعمل بدون إنترنت -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(registration => {
+                        console.log('✅ Service Worker مسجل بنجاح');
+                    })
+                    .catch(error => {
+                        console.log('❌ فشل تسجيل Service Worker:', error);
+                    });
+            });
+        }
+        
+        // منع zoom على iOS
+        document.addEventListener('gesturestart', e => e.preventDefault());
+        document.addEventListener('gesturechange', e => e.preventDefault());
+        document.addEventListener('gestureend', e => e.preventDefault());
+    </script>
+</body>
+</html>
